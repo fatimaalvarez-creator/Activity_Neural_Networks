@@ -1,210 +1,207 @@
 """
-Ejercicio 1 – Perceptrón de una neurona y SVM de una neurona
-============================================================
-Implementa:
-  - Perceptrón (sigmoide / pérdida BCE)
-  - SVM (pérdida hinge)
-Ambos entrenados con SGD, Batch GD y Mini-Batch GD.
-Evaluación con validación cruzada de 5 folds, 150 épocas.
-Dataset: misterious_data_1.txt (primera columna = etiqueta)
+Ejercicio 1 — Perceptrón de una neurona + SVM de una neurona
+Dataset: misterious_data_1.txt (2 clases)
+Variantes: SGD, Batch GD, Mini-batch GD
+Evaluación: Cross-validación de 5 folds, 100 épocas
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import KFold
-from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
-# ── Carga de datos ─────────────────────────────────────────────────────────
-def load_binary_data(path):
-    raw = np.loadtxt(path)
-    X = raw[:, 1:]
-    y = raw[:, 0]
-    classes = np.unique(y)
-    y = np.where(y == classes[0], -1, 1).astype(int)
-    return X, y
+# ─────────────────────────────────────────────
+# Carga de datos
+# ─────────────────────────────────────────────
+data = np.loadtxt('Exercise1/misterious_data_1.txt', delimiter='\t')
+X = data[:, 1:]
+y = data[:, 0].astype(int)
+y[y == 2] = -1   # etiquetas: 1 y -1
 
-X, y = load_binary_data('Exercise1\misterious_data_1.txt')
-print(f"Dataset cargado: {X.shape[0]} muestras, {X.shape[1]} características")
-print(f"Etiquetas: {np.unique(y)}")
+# ─────────────────────────────────────────────
+# Funciones del Perceptrón
+# ─────────────────────────────────────────────
+def perceptron(x, w):
+    """Predicción de una sola muestra."""
+    return 1 if x @ w > 0 else -1
 
-# ── Activación sigmoide ────────────────────────────────────────────────────
-def sigmoid(z):
-    return 1 / (1 + np.exp(-np.clip(z, -500, 500)))
+def perceptron_mult(X, w):
+    """Predicción vectorizada."""
+    return np.sign(X @ w)
 
-# ══════════════════════════════════════════════════════════════════════════
-# PERCEPTRÓN DE UNA NEURONA  (sigmoide / pérdida BCE)
-# ══════════════════════════════════════════════════════════════════════════
-class Perceptron:
-    """
-    Perceptrón de una neurona con activación sigmoide.
-    Modos: 'sgd', 'batch', 'minibatch'
-    """
-    def __init__(self, lr=0.05, epochs=150, mode='sgd', batch_size=32, seed=42):
-        self.lr = lr
-        self.epochs = epochs
-        self.mode = mode
-        self.batch_size = batch_size
-        self.seed = seed
+def classification_error(X, y, w):
+    return np.mean(perceptron_mult(X, w) != y)
 
-    def _init_weights(self, n):
-        rng = np.random.RandomState(self.seed)
-        self.w = rng.randn(n) * 0.01
-        self.b = 0.0
+# ── Perceptrón SGD ──────────────────────────
+def train_perceptron_sgd(X_tr, y_tr, X_te, y_te, alpha=0.01, n_epochs=100):
+    n, d = X_tr.shape
+    w = np.zeros(d)
+    errors = []
+    for _ in range(n_epochs):
+        idx = np.random.permutation(n)
+        for i in idx:
+            yp = perceptron(X_tr[i], w)
+            if y_tr[i] != yp:
+                w += alpha * y_tr[i] * X_tr[i]
+        errors.append(classification_error(X_te, y_te, w))
+    return errors
 
-    def _forward(self, X):
-        return sigmoid(X @ self.w + self.b)
+# ── Perceptrón Batch GD ──────────────────────
+def train_perceptron_batch(X_tr, y_tr, X_te, y_te, alpha=0.01, n_epochs=100):
+    n, d = X_tr.shape
+    w = np.zeros(d)
+    errors = []
+    for _ in range(n_epochs):
+        wrong = (perceptron_mult(X_tr, w) != y_tr)
+        if wrong.any():
+            w += alpha * (X_tr[wrong].T @ y_tr[wrong])
+        errors.append(classification_error(X_te, y_te, w))
+    return errors
 
-    def predict(self, X):
-        return np.where(self._forward(X) >= 0.5, 1, -1)
+# ── Perceptrón Mini-batch GD ─────────────────
+def train_perceptron_minibatch(X_tr, y_tr, X_te, y_te, alpha=0.01,
+                               n_epochs=100, batch_size=32):
+    n, d = X_tr.shape
+    w = np.zeros(d)
+    errors = []
+    for _ in range(n_epochs):
+        idx = np.random.permutation(n)
+        for start in range(0, n, batch_size):
+            b = idx[start:start + batch_size]
+            wrong = (perceptron_mult(X_tr[b], w) != y_tr[b])
+            if wrong.any():
+                w += alpha * (X_tr[b][wrong].T @ y_tr[b][wrong])
+        errors.append(classification_error(X_te, y_te, w))
+    return errors
 
-    def _update(self, X, y_bin):
-        """Una pasada de actualización de pesos según el modo."""
-        n = len(X)
-        if self.mode == 'sgd':
-            for i in np.random.permutation(n):
-                xi, yi = X[i:i+1], y_bin[i:i+1]
-                grad = self._forward(xi) - yi
-                self.w -= self.lr * xi[0] * grad[0]
-                self.b -= self.lr * grad[0]
+# ─────────────────────────────────────────────
+# Funciones del SVM de una neurona
+# Regla: hinge loss + regularización L2
+# ─────────────────────────────────────────────
+def train_svm_sgd(X_tr, y_tr, X_te, y_te, alpha=0.01, lam=0.001, n_epochs=100):
+    n, d = X_tr.shape
+    w = np.zeros(d)
+    errors = []
+    for _ in range(n_epochs):
+        idx = np.random.permutation(n)
+        for i in idx:
+            if y_tr[i] * (X_tr[i] @ w) < 1:
+                w -= alpha * (-y_tr[i] * X_tr[i] + lam * w)
+            else:
+                w -= alpha * lam * w
+        errors.append(np.mean(np.sign(X_te @ w) != y_te))
+    return errors
 
-        elif self.mode == 'batch':
-            pred = self._forward(X)
-            grad = pred - y_bin
-            self.w -= self.lr * (X.T @ grad) / n
-            self.b -= self.lr * grad.mean()
+def train_svm_batch(X_tr, y_tr, X_te, y_te, alpha=0.005, lam=0.001, n_epochs=100):
+    n, d = X_tr.shape
+    w = np.zeros(d)
+    errors = []
+    for _ in range(n_epochs):
+        margins = y_tr * (X_tr @ w)
+        violated = margins < 1
+        grad = ((-X_tr[violated].T @ y_tr[violated]) / n + lam * w
+                if violated.any() else lam * w)
+        w -= alpha * grad
+        errors.append(np.mean(np.sign(X_te @ w) != y_te))
+    return errors
 
-        elif self.mode == 'minibatch':
-            for start in range(0, n, self.batch_size):
-                idx = np.random.permutation(n)[start:start+self.batch_size]
-                xi, yi = X[idx], y_bin[idx]
-                grad = self._forward(xi) - yi
-                self.w -= self.lr * (xi.T @ grad) / len(idx)
-                self.b -= self.lr * grad.mean()
+def train_svm_minibatch(X_tr, y_tr, X_te, y_te, alpha=0.005, lam=0.001,
+                        n_epochs=100, batch_size=32):
+    n, d = X_tr.shape
+    w = np.zeros(d)
+    errors = []
+    for _ in range(n_epochs):
+        idx = np.random.permutation(n)
+        for start in range(0, n, batch_size):
+            b = idx[start:start + batch_size]
+            margins = y_tr[b] * (X_tr[b] @ w)
+            violated = margins < 1
+            grad = ((-X_tr[b][violated].T @ y_tr[b][violated]) / len(b) + lam * w
+                    if violated.any() else lam * w)
+            w -= alpha * grad
+        errors.append(np.mean(np.sign(X_te @ w) != y_te))
+    return errors
 
-    def cross_validate(self, X, y, k=5):
-        """Devuelve (épocas, error_promedio_por_época)."""
-        kf = KFold(n_splits=k, shuffle=True, random_state=42)
-        fold_errors = np.zeros((k, self.epochs))
+# ─────────────────────────────────────────────
+# Cross-validación (5 folds, 100 épocas)
+# ─────────────────────────────────────────────
+from sklearn.model_selection import KFold
 
-        for fold, (tr, te) in enumerate(kf.split(X)):
-            scaler = StandardScaler().fit(X[tr])
-            Xtr = scaler.transform(X[tr])
-            Xte = scaler.transform(X[te])
-            y_bin_tr = (y[tr] == 1).astype(float)
+N_SPLITS = 5
+N_EPOCHS = 100
+kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=42)
 
-            self._init_weights(Xtr.shape[1])
-            for epoch in range(self.epochs):
-                self._update(Xtr, y_bin_tr)
-                fold_errors[fold, epoch] = np.mean(self.predict(Xte) != y[te])
+# Acumuladores: shape (n_splits, n_epochs)
+results = {
+    'perc_sgd':      [],
+    'perc_batch':    [],
+    'perc_mini':     [],
+    'svm_sgd':       [],
+    'svm_batch':     [],
+    'svm_mini':      [],
+}
 
-        return np.arange(1, self.epochs + 1), fold_errors.mean(axis=0)
+print(f"Entrenando con {N_SPLITS}-fold CV, {N_EPOCHS} épocas...")
 
+for fold, (tr, te) in enumerate(kf.split(X), 1):
+    X_tr, y_tr = X[tr], y[tr]
+    X_te, y_te = X[te], y[te]
+    print(f"  Fold {fold}/{N_SPLITS}", end='\r')
 
-# ══════════════════════════════════════════════════════════════════════════
-# SVM DE UNA NEURONA  (pérdida hinge + regularización L2)
-# ══════════════════════════════════════════════════════════════════════════
-class SingleNeuronSVM:
-    """
-    SVM de una neurona entrenada con sub-gradiente de la pérdida hinge.
-    Modos: 'sgd', 'batch', 'minibatch'
-    """
-    def __init__(self, lr=0.01, C=1.0, epochs=150, mode='sgd', batch_size=32, seed=42):
-        self.lr = lr
-        self.C = C
-        self.epochs = epochs
-        self.mode = mode
-        self.batch_size = batch_size
-        self.seed = seed
+    results['perc_sgd'].append(
+        train_perceptron_sgd(X_tr, y_tr, X_te, y_te, n_epochs=N_EPOCHS))
+    results['perc_batch'].append(
+        train_perceptron_batch(X_tr, y_tr, X_te, y_te, n_epochs=N_EPOCHS))
+    results['perc_mini'].append(
+        train_perceptron_minibatch(X_tr, y_tr, X_te, y_te, n_epochs=N_EPOCHS))
+    results['svm_sgd'].append(
+        train_svm_sgd(X_tr, y_tr, X_te, y_te, n_epochs=N_EPOCHS))
+    results['svm_batch'].append(
+        train_svm_batch(X_tr, y_tr, X_te, y_te, n_epochs=N_EPOCHS))
+    results['svm_mini'].append(
+        train_svm_minibatch(X_tr, y_tr, X_te, y_te, n_epochs=N_EPOCHS))
 
-    def _init_weights(self, n):
-        rng = np.random.RandomState(self.seed)
-        self.w = rng.randn(n) * 0.01
-        self.b = 0.0
+# Promedio sobre folds
+avg = {k: np.mean(v, axis=0) for k, v in results.items()}
 
-    def predict(self, X):
-        return np.sign(X @ self.w + self.b)
+# ─────────────────────────────────────────────
+# Resultados en consola
+# ─────────────────────────────────────────────
+print("\n=== Error de clasificación promedio (época 100) ===")
+print(f"  Perceptrón SGD       : {avg['perc_sgd'][-1]:.4f}")
+print(f"  Perceptrón Batch GD  : {avg['perc_batch'][-1]:.4f}")
+print(f"  Perceptrón Mini-batch: {avg['perc_mini'][-1]:.4f}")
+print(f"  SVM SGD              : {avg['svm_sgd'][-1]:.4f}")
+print(f"  SVM Batch GD         : {avg['svm_batch'][-1]:.4f}")
+print(f"  SVM Mini-batch       : {avg['svm_mini'][-1]:.4f}")
 
-    def _hinge_grad(self, X, y):
-        """Sub-gradiente de hinge loss con regularización L2."""
-        margins = y * (X @ self.w + self.b)
-        mask = (margins < 1).astype(float)
-        gw = self.w - self.C * (mask[:, None] * y[:, None] * X).mean(axis=0)
-        gb = -self.C * (mask * y).mean()
-        return gw, gb
-
-    def _update(self, X, y):
-        n = len(X)
-        if self.mode == 'sgd':
-            for i in np.random.permutation(n):
-                gw, gb = self._hinge_grad(X[i:i+1], y[i:i+1])
-                self.w -= self.lr * gw
-                self.b -= self.lr * gb
-
-        elif self.mode == 'batch':
-            gw, gb = self._hinge_grad(X, y)
-            self.w -= self.lr * gw
-            self.b -= self.lr * gb
-
-        elif self.mode == 'minibatch':
-            for start in range(0, n, self.batch_size):
-                idx = np.random.permutation(n)[start:start+self.batch_size]
-                gw, gb = self._hinge_grad(X[idx], y[idx])
-                self.w -= self.lr * gw
-                self.b -= self.lr * gb
-
-    def cross_validate(self, X, y, k=5):
-        kf = KFold(n_splits=k, shuffle=True, random_state=42)
-        fold_errors = np.zeros((k, self.epochs))
-
-        for fold, (tr, te) in enumerate(kf.split(X)):
-            scaler = StandardScaler().fit(X[tr])
-            Xtr = scaler.transform(X[tr])
-            Xte = scaler.transform(X[te])
-
-            self._init_weights(Xtr.shape[1])
-            for epoch in range(self.epochs):
-                self._update(Xtr, y[tr])
-                fold_errors[fold, epoch] = np.mean(self.predict(Xte) != y[te])
-
-        return np.arange(1, self.epochs + 1), fold_errors.mean(axis=0)
-
-
-# ── Entrenamiento y gráfica ────────────────────────────────────────────────
-EPOCHS = 150
-MODES  = ['sgd', 'batch', 'minibatch']
-LABELS = {'sgd': 'Stochastic GD', 'batch': 'Batch GD', 'minibatch': 'Mini-Batch GD'}
-COLORS = {'sgd': '#e63946', 'batch': '#2a9d8f', 'minibatch': '#e9c46a'}
-
+# ─────────────────────────────────────────────
+# Gráfica: Error promedio vs. Época
+# ─────────────────────────────────────────────
+epochs = range(1, N_EPOCHS + 1)
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-fig.suptitle('Ejercicio 1 – Error de Clasificación vs Época', fontsize=14, fontweight='bold')
 
-# — Perceptrón —
-print("\n=== Perceptrón (BCE) ===")
-for m in MODES:
-    model = Perceptron(lr=0.05, epochs=EPOCHS, mode=m)
-    ep, err = model.cross_validate(X, y)
-    print(f"  {LABELS[m]:20s}  Error final: {err[-1]:.4f}  ({(1-err[-1])*100:.1f}% acc)")
-    axes[0].plot(ep, err, label=LABELS[m], color=COLORS[m], linewidth=2)
+# Perceptrón
+axes[0].plot(epochs, avg['perc_sgd'],   label='SGD',        linewidth=2)
+axes[0].plot(epochs, avg['perc_batch'], label='Batch GD',   linewidth=2)
+axes[0].plot(epochs, avg['perc_mini'],  label='Mini-batch', linewidth=2)
+axes[0].set_title('Perceptrón: Error vs. Época\n(promedio 5-fold CV)', fontsize=13)
+axes[0].set_xlabel('Época')
+axes[0].set_ylabel('Error de Clasificación')
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
 
-axes[0].set_title('Perceptrón (Sigmoide / BCE)', fontweight='bold')
-axes[0].set_xlabel('Época'); axes[0].set_ylabel('Error de Clasificación Promedio')
-axes[0].legend(); axes[0].grid(alpha=0.3); axes[0].set_ylim(0, 1)
-
-# — SVM —
-print("\n=== SVM (Hinge) ===")
-for m in MODES:
-    model = SingleNeuronSVM(lr=0.01, C=1.0, epochs=EPOCHS, mode=m)
-    ep, err = model.cross_validate(X, y)
-    print(f"  {LABELS[m]:20s}  Error final: {err[-1]:.4f}  ({(1-err[-1])*100:.1f}% acc)")
-    axes[1].plot(ep, err, label=LABELS[m], color=COLORS[m], linewidth=2)
-
-axes[1].set_title('SVM (Pérdida Hinge)', fontweight='bold')
-axes[1].set_xlabel('Época'); axes[1].set_ylabel('Error de Clasificación Promedio')
-axes[1].legend(); axes[1].grid(alpha=0.3); axes[1].set_ylim(0, 1)
+# SVM
+axes[1].plot(epochs, avg['svm_sgd'],   label='SGD',        linewidth=2)
+axes[1].plot(epochs, avg['svm_batch'], label='Batch GD',   linewidth=2)
+axes[1].plot(epochs, avg['svm_mini'],  label='Mini-batch', linewidth=2)
+axes[1].set_title('SVM (1 neurona): Error vs. Época\n(promedio 5-fold CV)', fontsize=13)
+axes[1].set_xlabel('Época')
+axes[1].set_ylabel('Error de Clasificación')
+axes[1].legend()
+axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('ejercicio1_resultados.png', dpi=150, bbox_inches='tight')
+plt.savefig('ejercicio1_error_vs_epoca.png', dpi=150, bbox_inches='tight')
 plt.show()
-print("\nGráfica guardada: ejercicio1_resultados.png")
+print("Gráfica guardada: ejercicio1_error_vs_epoca.png")
