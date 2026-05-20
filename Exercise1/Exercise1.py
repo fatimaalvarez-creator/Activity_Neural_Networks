@@ -202,6 +202,6 @@ axes[1].legend()
 axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('ejercicio1_error_vs_epoca.png', dpi=150, bbox_inches='tight')
+plt.savefig('ejercicio1.png', dpi=150, bbox_inches='tight')
 plt.show()
-print("Gráfica guardada: ejercicio1_error_vs_epoca.png")
+print("Gráfica guardada: ejercicio1.png")
